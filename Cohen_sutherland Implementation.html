@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Line Clipping using Cohen-Sutherland Algorithm</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas" width="800" height="600"></canvas>
+    <script>
+        const vsSource = `
+            attribute vec2 aVertexPosition;
+            void main(void) {
+                gl_Position = vec4(aVertexPosition, 0.0, 1.0);
+            }
+        `;
+
+        const fsSource = `
+            precision mediump float;
+            uniform vec4 uColor;
+            void main(void) {
+                gl_FragColor = uColor;
+            }
+        `;
+
+        function initShaderProgram(gl, vsSource, fsSource) {
+            const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+            const shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                console.error('Unable to initialize the shader program: ' + gl.getProgramInfoLog(shaderProgram));
+                return null;
+            }
+            return shaderProgram;
+        }
+
+        function loadShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function initBuffers(gl, positions) {
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+            return buffer;
+        }
+
+        function drawScene(gl, programInfo, xmin, ymin, xmax, ymax, x0, y0, x1, y1) {
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.useProgram(programInfo.program);
+
+            // Draw the rectangular viewport
+            const rectVertices = [
+                xmin, ymin,
+                xmin, ymax,
+                xmax, ymax,
+                xmax, ymin,
+                xmin, ymin 
+            ];
+            const rectBuffer = initBuffers(gl, rectVertices);
+            gl.bindBuffer(gl.ARRAY_BUFFER, rectBuffer);
+            gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+            gl.uniform4f(programInfo.uniformLocations.uColor, 0.0, 1.0, 0.0, 1.0); // Green color for rectangle
+            gl.drawArrays(gl.LINE_LOOP, 0, 5);
+
+            // Clip the line and draw it
+            const clippedLine = cohenSutherlandClip(x0, y0, x1, y1, xmin, ymin, xmax, ymax);
+            if (clippedLine) {
+                const linePositions = [clippedLine[0], clippedLine[1], clippedLine[2], clippedLine[3]];
+                const lineBuffer = initBuffers(gl, linePositions);
+                gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+                gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 2, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+                gl.uniform4f(programInfo.uniformLocations.uColor, 1.0, 0.0, 0.0, 1.0); // Red color for line
+                gl.drawArrays(gl.LINES, 0, 2);
+            }
+        }
+
+        function main() {
+            const canvas = document.getElementById('glcanvas');
+            const gl = canvas.getContext('webgl');
+            if (!gl) {
+                alert('Unable to initialize WebGL. Your browser or machine may not support it.');
+                return;
+            }
+
+            const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+            const programInfo = {
+                program: shaderProgram,
+                attribLocations: {
+                    vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+                },
+                uniformLocations: {
+                    uColor: gl.getUniformLocation(shaderProgram, 'uColor'),
+                }
+            };
+
+          
+            const xmin = -4, ymin = -3, xmax = 4, ymax = 3;
+            const x0 = -3, y0 = -2, x1 = 2, y1 = 3;
+
+            drawScene(gl, programInfo, xmin, ymin, xmax, ymax, x0, y0, x1, y1);
+        }
+
+        function computeCode(x, y, xmin, ymin, xmax, ymax) {
+            let code = 0;
+            if (x < xmin) code |= 1; // left
+            if (x > xmax) code |= 2; // right
+            if (y < ymin) code |= 4; // bottom
+            if (y > ymax) code |= 8; // top
+            return code;
+        }
+
+        function cohenSutherlandClip(x0, y0, x1, y1, xmin, ymin, xmax, ymax) {
+            let code0 = computeCode(x0, y0, xmin, ymin, xmax, ymax);
+            let code1 = computeCode(x1, y1, xmin, ymin, xmax, ymax);
+            let accept = false;
+
+            while (true) {
+                if ((code0 | code1) === 0) { // Trivially accept
+                    accept = true;
+                    break;
+                } else if ((code0 & code1) !== 0) { // Trivially reject
+                    break;
+                } else {
+                    let x, y;
+                    const outcodeOut = code0 ? code0 : code1;
+
+                    if (outcodeOut & 8) { 
+                        x = x0 + (x1 - x0) * (ymax - y0) / (y1 - y0);
+                        y = ymax;
+                    } else if (outcodeOut & 4) { 
+                        x = x0 + (x1 - x0) * (ymin - y0) / (y1 - y0);
+                        y = ymin;
+                    } else if (outcodeOut & 2) { 
+                        y = y0 + (y1 - y0) * (xmax - x0) / (x1 - x0);
+                        x = xmax;
+                    } else if (outcodeOut & 1) {
+                        y = y0 + (y1 - y0) * (xmin - x0) / (x1 - x0);
+                        x = xmin;
+                    }
+
+                    if (outcodeOut === code0) {
+                        x0 = x;
+                        y0 = y;
+                        code0 = computeCode(x0, y0, xmin, ymin, xmax, ymax);
+                    } else {
+                        x1 = x;
+                        y1 = y;
+                        code1 = computeCode(x1, y1, xmin, ymin, xmax, ymax);
+                    }
+                }
+            }
+
+            if (accept) {
+                return [x0, y0, x1, y1];
+            } else {
+                return null;
+            }
+        }
+
+        window.onload = main;
+    </script>
+</body>
+</html>
